@@ -1,5 +1,5 @@
 import argparse
-from server import ChatServer
+from server_thr import ChatServer
 from server_database import ServerStorage
 
 MAX_CONNECTIONS = 5

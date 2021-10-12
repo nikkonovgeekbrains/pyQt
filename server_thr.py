@@ -15,18 +15,21 @@ from my_log import log
 from common_tools import get_message, send_message
 from chatBase import ChatBaseClass
 import threading
-from discriptors import ServerVerifier
-
+from errors_list import IncorrectDataRecivedError, NonDictInputError
 MAX_MSG_LEN = 1024
+DEF_DB_FILE = 'server_db.db3'
 
 logger = logging.getLogger('app.server')
 
 
 class ChatServer(ChatBaseClass):
-    soc_port = ServerVerifier('server')
 
     def __init__(self, name, addr, port, max_connections, db_con):
-        super().__init__(name, addr, port)
+        self.name = name
+        self.soc_addr = addr
+        self.soc_port = port
+        self.sock = None
+        self.max_msg_len = DEF_MAX_MSG_LEN
         self.server_db = db_con
         self.logger = logging.getLogger('app.server')
         self.all_clients = []
@@ -38,11 +41,11 @@ class ChatServer(ChatBaseClass):
         self.max_connections = max_connections
         self.start_fl = False       # Флаг успешного старта сервера
         # try:
-        self.init_socket(addr, port)
-        self.main_loop_thr = threading.Thread(target=self.main_loop)
-        self.main_loop_thr.daemon = True
+        #self.init_socket(addr, port)
+        #self.main_loop_thr = threading.Thread(target=self.main_loop)
+        #self.main_loop_thr.daemon = True
 
-        self.start_main_loop()
+        #self.start_main_loop()
 
 
         # except:
@@ -51,29 +54,74 @@ class ChatServer(ChatBaseClass):
             # self.soc = None
             # self.logger.info(f"Не удалось запустить сервер. Адрес: {addr}, порт: {port}")
 
-    # def main_menu_loop(self):
-    #     ChatServer.print_help()
-    #     while True:
-    #         command = input('Введите комманду: ')
-    #         if command == 'help':
-    #             self.print_help()
-    #         elif command == 'exit':
-    #             break
-    #         elif command == 'users':
-    #             for user in sorted(self.server_db.users_list()):
-    #                 print(f'Пользователь {user[0]}, последний вход: {user[1]}')
-    #         elif command == 'connected':
-    #             for user in sorted(self.server_db.active_users_list()):
-    #                 print(
-    #                     f'Пользователь {user[0]}, подключен: {user[1]}:{user[2]}, время установки соединения: {user[3]}')
-    #         elif command == 'loghist':
-    #             name = input(
-    #                 'Введите имя пользователя для просмотра истории. Для вывода всей истории, просто нажмите Enter: ')
-    #             for user in sorted(self.server_db.login_history(name)):
-    #                 print(f'Пользователь: {user[0]} время входа: {user[1]}. Вход с: {user[2]}:{user[3]}')
-    #         else:
-    #             print('Команда не распознана. Список доступных команд:')
-    #             ChatServer.print_help()
+    def run(self):
+        # Инициализация Сокета
+        self.init_socket()
+
+        # Основной цикл программы сервера
+        while True:
+            try:
+                conn, addr = self.soc.accept()  # Проверка подключений
+            except OSError as e:
+                pass
+                # print(e)
+            else:
+                print(f"Получен запрос на соединение от {str(addr)}")
+                self.all_clients.append(conn)
+                # print(f"all_clients: {self.all_clients}")
+            finally:
+                self.rec_data_cl = []
+                self.send_data_cl = []
+                try:
+                    self.rec_data_cl, self.send_data_cl, _ = select.select(self.all_clients, self.all_clients, [], self.wait)
+                except:
+                    pass  # Ничего не делать, если какой-то клиент отключился
+
+                self.read_requests()
+                # Если есть сообщения, обрабатываем каждое.
+                self.proc_messages()
+                self.clear_msg_buf()
+
+    def get_message(self, cl_sock):
+        encoded_response = cl_sock.recv(self.max_msg_len)
+        if isinstance(encoded_response, bytes):
+            response = pickle.loads(encoded_response)
+            if isinstance(response, dict):
+                return response
+            else:
+                raise IncorrectDataRecivedError
+        else:
+            raise IncorrectDataRecivedError
+
+    def send_message(self, cl_sock, message):
+        if not isinstance(message, dict):
+            raise NonDictInputError
+        encoded_message = pickle.dumps(message)
+        cl_sock.send(encoded_message)
+
+    def main_menu_loop(self):
+        ChatServer.print_help()
+        while True:
+            command = input('Введите комманду: ')
+            if command == 'help':
+                self.print_help()
+            elif command == 'exit':
+                break
+            elif command == 'users':
+                for user in sorted(self.server_db.users_list()):
+                    print(f'Пользователь {user[0]}, последний вход: {user[1]}')
+            elif command == 'connected':
+                for user in sorted(self.server_db.active_users_list()):
+                    print(
+                        f'Пользователь {user[0]}, подключен: {user[1]}:{user[2]}, время установки соединения: {user[3]}')
+            elif command == 'loghist':
+                name = input(
+                    'Введите имя пользователя для просмотра истории. Для вывода всей истории, просто нажмите Enter: ')
+                for user in sorted(self.server_db.login_history(name)):
+                    print(f'Пользователь: {user[0]} время входа: {user[1]}. Вход с: {user[2]}:{user[3]}')
+            else:
+                print('Команда не распознана. Список доступных команд:')
+                ChatServer.print_help()
 
     @staticmethod
     def print_help():
@@ -87,9 +135,7 @@ class ChatServer(ChatBaseClass):
     def start_main_loop(self):
         self.main_loop_thr.start()
 
-    def init_socket(self, soc_addr, soc_port):
-        self.soc_addr = soc_addr
-        self.soc_port = soc_port
+    def init_socket(self):
         self.soc = socket(AF_INET, SOCK_STREAM)
         self.soc.bind((self.soc_addr, self.soc_port))
         self.soc.listen(self.max_connections)
